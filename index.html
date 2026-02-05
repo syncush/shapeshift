@@ -1,0 +1,469 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ShapeShift | Shapefile to GeoJSON</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- shpjs for client-side parsing -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/shpjs/4.0.4/shp.min.js"></script>
+    <!-- Leaflet for Map Preview -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css" />
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+        
+        body {
+            font-family: 'Inter', sans-serif;
+            background: radial-gradient(circle at top left, #f8fafc, #e2e8f0);
+            min-height: 100vh;
+        }
+
+        .glass-panel {
+            background: rgba(255, 255, 255, 0.7);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+        }
+
+        .drop-zone {
+            transition: all 0.3s ease;
+            border: 2px dashed #cbd5e1;
+        }
+
+        .drop-zone.dragover {
+            border-color: #3b82f6;
+            background: rgba(59, 130, 246, 0.05);
+            transform: scale(1.01);
+        }
+
+        .file-card {
+            animation: slideIn 0.4s ease-out forwards;
+        }
+
+        @keyframes slideIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .custom-scrollbar::-webkit-scrollbar {
+            width: 6px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+            background: #cbd5e1;
+            border-radius: 10px;
+        }
+
+        #mapPreview {
+            height: 500px;
+            width: 100%;
+            border-radius: 1rem;
+            z-index: 10;
+        }
+    </style>
+</head>
+<body class="p-4 md:p-8">
+
+    <div class="max-w-5xl mx-auto">
+        <!-- Header -->
+        <header class="mb-10 text-center">
+            <h1 class="text-4xl font-bold text-slate-900 mb-2">ShapeShift</h1>
+            <p class="text-slate-500 font-medium">Convert Shapefiles to adaptive GeoJSON schemas and preview on maps.</p>
+        </header>
+
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+            
+            <!-- Upload Section -->
+            <div class="lg:col-span-1">
+                <div class="glass-panel rounded-3xl p-6 shadow-xl sticky top-8">
+                    <h2 class="text-xl font-semibold mb-4 flex items-center gap-2 text-slate-800">
+                        <i class="fas fa-cloud-upload-alt text-blue-500"></i>
+                        Upload
+                    </h2>
+                    
+                    <div id="dropZone" class="drop-zone rounded-2xl p-8 text-center cursor-pointer mb-4">
+                        <input type="file" id="fileInput" class="hidden" accept=".zip,.shp,.dbf,.shx,.prj" multiple>
+                        <div class="text-slate-400 mb-3">
+                            <i class="fas fa-file-zipper text-4xl mb-4 text-slate-300"></i>
+                            <p class="text-sm">Drag & drop <b>.zip</b> archives</p>
+                            <p class="text-xs mt-1">or multiple component files (.shp, .dbf)</p>
+                        </div>
+                        <button onclick="document.getElementById('fileInput').click()" class="bg-blue-600 hover:bg-blue-700 text-white px-5 py-2 rounded-full text-sm font-semibold transition shadow-lg shadow-blue-200">
+                            Choose Files
+                        </button>
+                    </div>
+
+                    <div class="bg-slate-50 rounded-xl p-4 text-xs text-slate-500 leading-relaxed">
+                        <p class="font-bold mb-1 uppercase text-[10px] text-slate-400">Map Preview Ready</p>
+                        Click the <i class="fas fa-globe-americas mx-1"></i> icon after conversion to visualize your geometries instantly on a map.
+                    </div>
+                </div>
+            </div>
+
+            <!-- List/Status Section -->
+            <div class="lg:col-span-2">
+                <div class="glass-panel rounded-3xl shadow-xl min-h-[500px] flex flex-col">
+                    <div class="p-6 border-b border-slate-100 flex justify-between items-center">
+                        <h2 class="text-xl font-semibold text-slate-800">Conversion Queue</h2>
+                        <span id="queueCount" class="bg-slate-100 text-slate-600 px-3 py-1 rounded-full text-xs font-bold">0 Items</span>
+                    </div>
+
+                    <div id="emptyState" class="flex-1 flex flex-col items-center justify-center p-12 text-center text-slate-400">
+                        <i class="fas fa-layer-group text-6xl mb-4 opacity-20"></i>
+                        <p class="text-lg">No files processed yet.</p>
+                        <p class="text-sm">Converted GeoJSON files will appear here.</p>
+                    </div>
+
+                    <div id="fileList" class="flex-1 overflow-y-auto p-6 space-y-4 hidden custom-scrollbar">
+                        <!-- File Cards injected here -->
+                    </div>
+
+                    <div id="actionFooter" class="p-6 border-t border-slate-100 bg-white/30 rounded-b-3xl hidden">
+                        <div class="flex justify-between items-center">
+                            <button id="clearBtn" class="text-slate-400 hover:text-red-500 text-sm font-medium transition">
+                                Clear All
+                            </button>
+                            <div class="flex gap-3">
+                                <p class="text-xs text-slate-400 text-right">
+                                    RFC 7946 Standard Compliant<br>Adaptive schema & Visual mapping.
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <footer class="mt-12 text-center text-slate-400 text-xs">
+            Powered by shpjs & Leaflet &bull; Built with Privacy in Mind
+        </footer>
+    </div>
+
+    <!-- Modal for JSON Preview -->
+    <div id="previewModal" class="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
+        <div class="bg-white rounded-3xl w-full max-w-4xl max-h-[80vh] flex flex-col shadow-2xl overflow-hidden">
+            <div class="p-6 border-b flex justify-between items-center bg-slate-50">
+                <h3 class="font-bold text-slate-800">GeoJSON Schema Preview</h3>
+                <button onclick="closePreview()" class="text-slate-400 hover:text-slate-600">
+                    <i class="fas fa-times text-xl"></i>
+                </button>
+            </div>
+            <div class="flex-1 overflow-auto p-6 bg-slate-900 text-green-400 font-mono text-xs custom-scrollbar">
+                <pre id="previewContent"></pre>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal for Map Visualization -->
+    <div id="mapModal" class="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
+        <div class="bg-white rounded-3xl w-full max-w-5xl shadow-2xl overflow-hidden flex flex-col">
+            <div class="p-4 border-b flex justify-between items-center bg-white">
+                <div>
+                    <h3 id="mapTitle" class="font-bold text-slate-800">Map Visualization</h3>
+                    <p id="mapSubtitle" class="text-xs text-slate-400"></p>
+                </div>
+                <button onclick="closeMap()" class="text-slate-400 hover:text-slate-600 w-10 h-10 flex items-center justify-center rounded-full hover:bg-slate-100 transition">
+                    <i class="fas fa-times text-xl"></i>
+                </button>
+            </div>
+            <div class="p-4 bg-slate-50">
+                <div id="mapPreview"></div>
+            </div>
+            <div class="p-4 bg-white border-t flex justify-end">
+                <button onclick="closeMap()" class="px-6 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-sm font-semibold transition">Close Map</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const dropZone = document.getElementById('dropZone');
+        const fileInput = document.getElementById('fileInput');
+        const fileList = document.getElementById('fileList');
+        const emptyState = document.getElementById('emptyState');
+        const queueCount = document.getElementById('queueCount');
+        const actionFooter = document.getElementById('actionFooter');
+        const clearBtn = document.getElementById('clearBtn');
+        const previewModal = document.getElementById('previewModal');
+        const previewContent = document.getElementById('previewContent');
+        
+        const mapModal = document.getElementById('mapModal');
+        const mapTitle = document.getElementById('mapTitle');
+        const mapSubtitle = document.getElementById('mapSubtitle');
+        let leafletMap = null;
+        let mapLayer = null;
+
+        let successCount = 0;
+
+        // Interaction Listeners
+        ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+            dropZone.addEventListener(eventName, e => { e.preventDefault(); e.stopPropagation(); }, false);
+        });
+
+        ['dragenter', 'dragover'].forEach(eventName => {
+            dropZone.addEventListener(eventName, () => dropZone.classList.add('dragover'), false);
+        });
+
+        ['dragleave', 'drop'].forEach(eventName => {
+            dropZone.addEventListener(eventName, () => dropZone.classList.remove('dragover'), false);
+        });
+
+        dropZone.addEventListener('drop', e => handleFiles(e.dataTransfer.files), false);
+        fileInput.addEventListener('change', e => handleFiles(e.target.files));
+
+        clearBtn.addEventListener('click', () => {
+            fileList.innerHTML = '';
+            successCount = 0;
+            updateUI();
+        });
+
+        async function handleFiles(files) {
+            if (files.length === 0) return;
+            
+            emptyState.classList.add('hidden');
+            fileList.classList.remove('hidden');
+            actionFooter.classList.remove('hidden');
+
+            const groups = {};
+            const zips = [];
+
+            for (let file of files) {
+                const ext = file.name.split('.').pop().toLowerCase();
+                const baseName = file.name.split('.').slice(0, -1).join('.');
+                
+                if (ext === 'zip') {
+                    zips.push(file);
+                } else {
+                    if (!groups[baseName]) groups[baseName] = {};
+                    groups[baseName][ext] = file;
+                }
+            }
+
+            for (let zipFile of zips) {
+                await processGroup(zipFile.name, { zip: zipFile });
+            }
+
+            for (let name in groups) {
+                await processGroup(name, groups[name]);
+            }
+        }
+
+        async function processGroup(displayName, filesMap) {
+            const cardId = 'file-' + Math.random().toString(36).substr(2, 9);
+            createFileCard(displayName, cardId);
+            
+            try {
+                let rawData;
+                
+                if (filesMap.zip) {
+                    const buffer = await filesMap.zip.arrayBuffer();
+                    rawData = await shp(buffer);
+                } else {
+                    if (!filesMap.shp) throw new Error("Missing .shp file component.");
+                    if (!filesMap.dbf) throw new Error("Missing .dbf file (attributes).");
+
+                    const shpBuffer = await filesMap.shp.arrayBuffer();
+                    const dbfBuffer = await filesMap.dbf.arrayBuffer();
+                    const prjBuffer = filesMap.prj ? await filesMap.prj.arrayBuffer() : null;
+                    
+                    rawData = await shp.combine([
+                        shp.parseShp(shpBuffer, prjBuffer ? new TextDecoder().decode(prjBuffer) : null),
+                        shp.parseDbf(dbfBuffer)
+                    ]);
+                }
+
+                // --- SCHEMA ADAPTATION ---
+                let allFeatures = [];
+                if (Array.isArray(rawData)) {
+                    allFeatures = rawData.flatMap(layer => layer.features || []);
+                } else if (rawData.features) {
+                    allFeatures = rawData.features;
+                } else if (rawData.type === 'Feature') {
+                    allFeatures = [rawData];
+                }
+
+                let finalGeoJSON;
+                if (allFeatures.length === 1) {
+                    finalGeoJSON = allFeatures[0];
+                } else {
+                    finalGeoJSON = {
+                        type: "FeatureCollection",
+                        features: allFeatures
+                    };
+                }
+
+                updateCardSuccess(cardId, finalGeoJSON, displayName);
+                successCount++;
+                updateUI();
+            } catch (err) {
+                updateCardError(cardId, err.message || "Failed to parse shapefile.");
+            }
+        }
+
+        function createFileCard(name, id) {
+            const div = document.createElement('div');
+            div.id = id;
+            div.className = "file-card glass-panel bg-white/50 rounded-2xl p-4 border border-slate-200 flex flex-col md:flex-row md:items-center justify-between gap-4";
+            div.innerHTML = `
+                <div class="flex items-center gap-4">
+                    <div class="w-10 h-10 rounded-xl bg-blue-100 flex items-center justify-center text-blue-600">
+                        <i class="fas fa-spinner fa-spin"></i>
+                    </div>
+                    <div>
+                        <h4 class="font-semibold text-slate-800 text-sm truncate max-w-[200px]">${name}</h4>
+                        <p class="text-xs text-slate-400">Processing spatial data...</p>
+                    </div>
+                </div>
+                <div class="flex items-center gap-2 status-container"></div>
+            `;
+            fileList.prepend(div);
+        }
+
+        function updateCardSuccess(id, data, originalName) {
+            const card = document.getElementById(id);
+            const isFeatureCollection = data.type === "FeatureCollection";
+            const featureCount = isFeatureCollection ? (data.features ? data.features.length : 0) : 1;
+            
+            const iconContainer = card.querySelector('.w-10');
+            iconContainer.innerHTML = '<i class="fas fa-check"></i>';
+            iconContainer.className = "w-10 h-10 rounded-xl bg-green-100 flex items-center justify-center text-green-600";
+            
+            card.querySelector('p').innerHTML = `Schema: ${data.type} • ${featureCount} feature${featureCount > 1 ? 's' : ''}`;
+            
+            const statusContainer = card.querySelector('.status-container');
+            
+            // Map Action
+            const mapBtn = document.createElement('button');
+            mapBtn.className = "text-blue-500 hover:text-blue-700 p-2 transition";
+            mapBtn.innerHTML = '<i class="fas fa-globe-americas"></i>';
+            mapBtn.title = "View on Map";
+            mapBtn.onclick = () => openMap(data, originalName);
+
+            // Preview Action
+            const previewBtn = document.createElement('button');
+            previewBtn.className = "text-slate-500 hover:text-slate-800 p-2 transition";
+            previewBtn.innerHTML = '<i class="fas fa-eye"></i>';
+            previewBtn.title = "Preview Structure";
+            previewBtn.onclick = () => openPreview(data);
+
+            // Download Action
+            const downloadBtn = document.createElement('button');
+            downloadBtn.className = "bg-slate-900 hover:bg-slate-800 text-white px-4 py-2 rounded-lg text-xs font-bold transition flex items-center gap-2";
+            downloadBtn.innerHTML = '<i class="fas fa-download"></i> Save';
+            downloadBtn.onclick = () => downloadGeoJSON(data, `${originalName}.geojson`);
+            
+            statusContainer.appendChild(mapBtn);
+            statusContainer.appendChild(previewBtn);
+            statusContainer.appendChild(downloadBtn);
+        }
+
+        function updateCardError(id, message) {
+            const card = document.getElementById(id);
+            if (!card) return;
+            const iconContainer = card.querySelector('.w-10');
+            iconContainer.innerHTML = '<i class="fas fa-exclamation-triangle"></i>';
+            iconContainer.className = "w-10 h-10 rounded-xl bg-red-100 flex items-center justify-center text-red-600";
+            card.querySelector('p').innerHTML = message;
+            card.querySelector('p').classList.replace('text-slate-400', 'text-red-500');
+        }
+
+        function updateUI() {
+            queueCount.innerText = `${successCount} Converted`;
+            if (fileList.children.length === 0) {
+                emptyState.classList.remove('hidden');
+                fileList.classList.add('hidden');
+                actionFooter.classList.add('hidden');
+            }
+        }
+
+        // --- MAP FUNCTIONS ---
+        function openMap(data, name) {
+            mapModal.classList.remove('hidden');
+            mapTitle.textContent = name;
+            const featureCount = data.type === "FeatureCollection" ? data.features.length : 1;
+            mapSubtitle.textContent = `${data.type} with ${featureCount} feature(s)`;
+
+            // Initialize map if it doesn't exist
+            if (!leafletMap) {
+                leafletMap = L.map('mapPreview').setView([0, 0], 2);
+                L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+                    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
+                }).addTo(leafletMap);
+            }
+
+            // Remove previous layers
+            if (mapLayer) {
+                leafletMap.removeLayer(mapLayer);
+            }
+
+            // Add GeoJSON
+            try {
+                mapLayer = L.geoJSON(data, {
+                    style: {
+                        color: "#3b82f6",
+                        weight: 2,
+                        opacity: 0.6,
+                        fillOpacity: 0.2
+                    },
+                    pointToLayer: function (feature, latlng) {
+                        return L.circleMarker(latlng, {
+                            radius: 6,
+                            fillColor: "#3b82f6",
+                            color: "#fff",
+                            weight: 1,
+                            opacity: 1,
+                            fillOpacity: 0.8
+                        });
+                    },
+                    onEachFeature: function(feature, layer) {
+                        if (feature.properties) {
+                            let popupContent = '<div class="text-xs font-mono max-h-32 overflow-auto">';
+                            for (let key in feature.properties) {
+                                popupContent += `<b>${key}:</b> ${feature.properties[key]}<br/>`;
+                            }
+                            popupContent += '</div>';
+                            layer.bindPopup(popupContent);
+                        }
+                    }
+                }).addTo(leafletMap);
+
+                // Fit bounds
+                leafletMap.fitBounds(mapLayer.getBounds(), { padding: [20, 20] });
+                
+                // Hack to fix Leaflet gray tiles issue in modals
+                setTimeout(() => {
+                    leafletMap.invalidateSize();
+                }, 200);
+            } catch (err) {
+                console.error("Map rendering error:", err);
+            }
+        }
+
+        function closeMap() {
+            mapModal.classList.add('hidden');
+        }
+
+        function openPreview(data) {
+            previewContent.textContent = JSON.stringify(data, null, 2).substring(0, 10000) + (JSON.stringify(data).length > 10000 ? "\n\n... (content truncated for preview)" : "");
+            previewModal.classList.remove('hidden');
+        }
+
+        function closePreview() {
+            previewModal.classList.add('hidden');
+        }
+
+        function downloadGeoJSON(data, filename) {
+            const blob = new Blob([JSON.stringify(data)], { type: 'application/geo+json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url; a.download = filename;
+            document.body.appendChild(a); a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }
+    </script>
+</body>
+</html>
